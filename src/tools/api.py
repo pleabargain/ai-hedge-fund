@@ -1,11 +1,70 @@
 import datetime
 import logging
 import os
+from urllib.parse import parse_qs, urlparse
+
 import pandas as pd
 import requests
 import time
 
 logger = logging.getLogger(__name__)
+
+# Dedupe user-visible Financial Datasets error lines within one process (e.g. many agents hit same 404).
+_printed_fd_api_error_keys: set[tuple[str, str | None, int]] = set()
+
+
+def reset_financial_datasets_error_report_dedupe() -> None:
+    """Clear dedupe keys (e.g. before a new CLI run in a long-lived REPL)."""
+    _printed_fd_api_error_keys.clear()
+
+
+def _ticker_from_url(url: str) -> str | None:
+    try:
+        qs = parse_qs(urlparse(url).query)
+        vals = qs.get("ticker")
+        return vals[0] if vals else None
+    except Exception:
+        return None
+
+
+def _report_fd_api_problem(
+    *,
+    operation: str,
+    url: str,
+    ticker: str | None,
+    response: requests.Response,
+) -> None:
+    """Log every failure; print a single user-facing line per (operation, ticker, status)."""
+    key = (operation, ticker, response.status_code)
+    snippet = (response.text or "").strip().replace("\n", " ")
+    if len(snippet) > 220:
+        snippet = snippet[:217] + "..."
+    base = url.split("?", 1)[0]
+    logger.warning(
+        "Financial Datasets %s HTTP %s ticker=%s url=%s body=%r",
+        operation,
+        response.status_code,
+        ticker,
+        base,
+        snippet[:500],
+    )
+    if key in _printed_fd_api_error_keys:
+        return
+    _printed_fd_api_error_keys.add(key)
+    hint = ""
+    if response.status_code == 404:
+        hint = " Symbol may be outside coverage or not found — see docs / ticker list."
+    elif response.status_code == 429:
+        hint = " Rate limit — see README «Financial Datasets API rate limits»; client retries with backoff."
+    elif response.status_code in (401, 403):
+        hint = " Check FINANCIAL_DATASETS_API_KEY and plan entitlements."
+    who = f"[{ticker}] " if ticker else ""
+    print(f"Financial Datasets: {operation} {who}HTTP {response.status_code}{hint}")
+    if snippet:
+        print(f"  Response (truncated): {snippet!r}")
+    ra = response.headers.get("Retry-After")
+    if ra:
+        print(f"  Retry-After header: {ra!r}")
 
 from src.data.cache import get_cache
 from src.data.models import (
@@ -26,37 +85,55 @@ from src.data.models import (
 _cache = get_cache()
 
 
-def _make_api_request(url: str, headers: dict, method: str = "GET", json_data: dict = None, max_retries: int = 3) -> requests.Response:
+def _make_api_request(
+    url: str,
+    headers: dict,
+    method: str = "GET",
+    json_data: dict = None,
+    max_retries: int = 3,
+    *,
+    operation: str = "request",
+    ticker: str | None = None,
+) -> requests.Response:
     """
     Make an API request with rate limiting handling and moderate backoff.
-    
-    Args:
-        url: The URL to request
-        headers: Headers to include in the request
-        method: HTTP method (GET or POST)
-        json_data: JSON data for POST requests
-        max_retries: Maximum number of retries (default: 3)
-    
-    Returns:
-        requests.Response: The response object
-    
-    Raises:
-        Exception: If the request fails with a non-429 error
+
+    On non-200 responses, logs via :mod:`logging` and prints a deduplicated summary
+    (see ``_report_fd_api_problem``). HTTP 429 is retried up to ``max_retries`` times.
     """
+    resolved_ticker = ticker
+    if json_data and isinstance(json_data.get("tickers"), list) and json_data["tickers"]:
+        resolved_ticker = resolved_ticker or json_data["tickers"][0]
+
     for attempt in range(max_retries + 1):  # +1 for initial attempt
         if method.upper() == "POST":
             response = requests.post(url, headers=headers, json=json_data)
         else:
             response = requests.get(url, headers=headers)
-        
+
         if response.status_code == 429 and attempt < max_retries:
-            # Linear backoff: 60s, 90s, 120s, 150s...
             delay = 60 + (30 * attempt)
-            print(f"Rate limited (429). Attempt {attempt + 1}/{max_retries + 1}. Waiting {delay}s before retrying...")
+            ra = response.headers.get("Retry-After")
+            ra_note = f" (Retry-After: {ra!r})" if ra else ""
+            print(
+                f"Rate limited (429) on {operation}. "
+                f"Attempt {attempt + 1}/{max_retries + 1}. Waiting {delay}s before retry{ra_note}..."
+            )
+            logger.warning(
+                "Financial Datasets 429 %s ticker=%s attempt=%s/%s sleep=%ss retry_after=%r",
+                operation,
+                resolved_ticker or _ticker_from_url(url),
+                attempt + 1,
+                max_retries + 1,
+                delay,
+                ra,
+            )
             time.sleep(delay)
             continue
-        
-        # Return the response (whether success, other errors, or final 429)
+
+        if response.status_code != 200:
+            tk = resolved_ticker or _ticker_from_url(url)
+            _report_fd_api_problem(operation=operation, url=url, ticker=tk, response=response)
         return response
 
 
@@ -76,7 +153,7 @@ def get_prices(ticker: str, start_date: str, end_date: str, api_key: str = None)
         headers["X-API-KEY"] = financial_api_key
 
     url = f"https://api.financialdatasets.ai/prices/?ticker={ticker}&interval=day&interval_multiplier=1&start_date={start_date}&end_date={end_date}"
-    response = _make_api_request(url, headers)
+    response = _make_api_request(url, headers, operation="prices", ticker=ticker)
     if response.status_code != 200:
         return []
 
@@ -118,7 +195,7 @@ def get_financial_metrics(
         headers["X-API-KEY"] = financial_api_key
 
     url = f"https://api.financialdatasets.ai/financial-metrics/?ticker={ticker}&report_period_lte={end_date}&limit={limit}&period={period}"
-    response = _make_api_request(url, headers)
+    response = _make_api_request(url, headers, operation="financial_metrics", ticker=ticker)
     if response.status_code != 200:
         return []
 
@@ -162,7 +239,9 @@ def search_line_items(
         "period": period,
         "limit": limit,
     }
-    response = _make_api_request(url, headers, method="POST", json_data=body)
+    response = _make_api_request(
+        url, headers, method="POST", json_data=body, operation="search_line_items", ticker=ticker
+    )
     if response.status_code != 200:
         return []
     
@@ -210,7 +289,7 @@ def get_insider_trades(
             url += f"&filing_date_gte={start_date}"
         url += f"&limit={limit}"
 
-        response = _make_api_request(url, headers)
+        response = _make_api_request(url, headers, operation="insider_trades", ticker=ticker)
         if response.status_code != 200:
             break
 
@@ -276,7 +355,7 @@ def get_company_news(
             url += f"&start_date={start_date}"
         url += f"&limit={limit}"
 
-        response = _make_api_request(url, headers)
+        response = _make_api_request(url, headers, operation="news", ticker=ticker)
         if response.status_code != 200:
             break
 
@@ -327,9 +406,8 @@ def get_market_cap(
             headers["X-API-KEY"] = financial_api_key
 
         url = f"https://api.financialdatasets.ai/company/facts/?ticker={ticker}"
-        response = _make_api_request(url, headers)
+        response = _make_api_request(url, headers, operation="company_facts", ticker=ticker)
         if response.status_code != 200:
-            print(f"Error fetching company facts: {ticker} - {response.status_code}")
             return None
 
         data = response.json()

@@ -3,7 +3,8 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { AlertTriangle, Brain, CheckCircle, Download, Play, RefreshCw, Server, Square, Trash2, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 
 interface OllamaStatus {
   installed: boolean;
@@ -33,7 +34,10 @@ interface DownloadProgress {
   error?: string;
 }
 
+const RECOVERY_MODEL = 'qwen3.5:9b';
+
 export function OllamaSettings() {
+  const prevRunningRef = useRef<boolean | undefined>(undefined);
   const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus | null>(null);
   const [recommendedModels, setRecommendedModels] = useState<RecommendedModel[]>([]);
   const [loading, setLoading] = useState(false);
@@ -62,11 +66,21 @@ export function OllamaSettings() {
     displayName: ''
   });
 
-  const fetchOllamaStatus = async () => {
+  const fetchOllamaStatus = useCallback(async () => {
     try {
       const response = await fetch('http://localhost:8000/ollama/status');
       if (response.ok) {
         const status = await response.json();
+        const prev = prevRunningRef.current;
+        if (prev === true && status.running === false && status.installed) {
+          toast.error(
+            'Ollama stopped responding or shut down. Try “Restart & recover” to restart and pull ' +
+              RECOVERY_MODEL +
+              '.',
+            { duration: 14000 }
+          );
+        }
+        prevRunningRef.current = status.running;
         setOllamaStatus(status);
         setError(null);
       } else {
@@ -76,8 +90,9 @@ export function OllamaSettings() {
     } catch (error) {
       console.error('Failed to fetch Ollama status:', error);
       setError('Failed to connect to backend service');
+      toast.error('Lost connection to the backend while checking Ollama.', { duration: 8000 });
     }
-  };
+  }, []);
 
   const fetchRecommendedModels = async () => {
     try {
@@ -109,6 +124,33 @@ export function OllamaSettings() {
     } catch (error) {
       console.error('Failed to start Ollama server:', error);
       setError('Failed to start Ollama server');
+    }
+    setActionLoading(null);
+  };
+
+  const restartOllamaRecover = async () => {
+    setActionLoading('restart-recover');
+    setError(null);
+    try {
+      const response = await fetch('http://localhost:8000/ollama/restart-recovery', {
+        method: 'POST',
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.success) {
+        toast.success(data.message || `Ollama restarted (${data.model || RECOVERY_MODEL})`);
+        await fetchOllamaStatus();
+      } else {
+        const msg =
+          (typeof data.detail === 'string' && data.detail) ||
+          data.message ||
+          'Restart & recover failed';
+        setError(msg);
+        toast.error(msg);
+      }
+    } catch (error) {
+      console.error('restart-recovery failed:', error);
+      setError('Failed to restart Ollama');
+      toast.error('Failed to restart Ollama');
     }
     setActionLoading(null);
   };
@@ -536,6 +578,13 @@ export function OllamaSettings() {
     refreshStatus();
   }, []);
 
+  useEffect(() => {
+    const id = setInterval(() => {
+      void fetchOllamaStatus();
+    }, 10000);
+    return () => clearInterval(id);
+  }, [fetchOllamaStatus]);
+
   // Check for active downloads after we have status and models data
   useEffect(() => {
     if (ollamaStatus?.running && recommendedModels.length > 0) {
@@ -699,16 +748,35 @@ export function OllamaSettings() {
               <p className="text-sm text-muted-foreground">
                 Server available at {ollamaStatus.server_url}
               </p>
+              <p className="text-xs text-amber-600 dark:text-amber-500 mt-2 max-w-xl">
+                If chat requests hang while the server still looks “up”, use Restart & recover — it stops local
+                Ollama, starts it again, and pulls <code className="font-mono">{RECOVERY_MODEL}</code> if needed.
+                CLI runs can auto-restart once per run when <code className="font-mono">OLLAMA_AUTO_RESTART_ON_STALL=1</code>{' '}
+                (default).
+              </p>
             </div>
           </div>
-          <Button
-            onClick={stopOllamaServer}
-            disabled={actionLoading === 'stop-server'}
-            className="flex items-center gap-2 text-red-400 hover:bg-red-500/20 hover:text-red-300 bg-red-500/10 border-red-500/30 hover:border-red-500/50"
-          >
-            <Square className="h-4 w-4" />
-            {actionLoading === 'stop-server' ? 'Stopping...' : 'Disconnect'}
-          </Button>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Button
+              variant="outline"
+              onClick={() => void restartOllamaRecover()}
+              disabled={actionLoading === 'restart-recover'}
+              className="flex items-center gap-2 border-amber-600/50 text-amber-700 hover:bg-amber-500/10 dark:text-amber-400"
+            >
+              <RefreshCw className={cn('h-4 w-4', actionLoading === 'restart-recover' && 'animate-spin')} />
+              {actionLoading === 'restart-recover'
+                ? 'Recovering…'
+                : `Restart & recover (${RECOVERY_MODEL})`}
+            </Button>
+            <Button
+              onClick={stopOllamaServer}
+              disabled={actionLoading === 'stop-server'}
+              className="flex items-center gap-2 text-red-400 hover:bg-red-500/20 hover:text-red-300 bg-red-500/10 border-red-500/30 hover:border-red-500/50"
+            >
+              <Square className="h-4 w-4" />
+              {actionLoading === 'stop-server' ? 'Stopping...' : 'Disconnect'}
+            </Button>
+          </div>
         </div>
       )}
 

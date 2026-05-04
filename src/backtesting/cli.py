@@ -1,21 +1,29 @@
 from __future__ import annotations
 
+import argparse
 import sys
+from argparse import Namespace
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-import argparse
 
 from colorama import Fore, Style, init
 import questionary
 
 from .engine import BacktestEngine
+from src.cli.input import resolve_use_ollama_and_instance
 from src.llm.models import LLM_ORDER, OLLAMA_LLM_ORDER, get_model_info, ModelProvider
 from src.utils.analysts import ANALYST_ORDER
 from src.main import run_hedge_fund
-from src.utils.ollama import ensure_ollama_and_model
+from src.utils.ollama import ensure_ollama_and_model, warn_suboptimal_quant_for_amd_vulkan
 
 
 def main() -> int:
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except ImportError:
+        pass
     parser = argparse.ArgumentParser(description="Run backtesting engine (modular)")
     parser.add_argument("--tickers", type=str, required=False, help="Comma-separated tickers")
     parser.add_argument(
@@ -71,62 +79,72 @@ def main() -> int:
             f"{', '.join(Fore.GREEN + choice.title().replace('_', ' ') + Style.RESET_ALL for choice in choices)}\n"
         )
 
-    # Model selection simplified: default to first ordered model or Ollama flag
-    if args.ollama:
+    # Model selection: same Ollama discovery / prompts as src/cli/input.py
+    use_ollama = resolve_use_ollama_and_instance(Namespace(ollama=args.ollama, model=None))
+    if use_ollama:
         print(f"{Fore.CYAN}Using Ollama for local LLM inference.{Style.RESET_ALL}")
-        model_name = questionary.select(
-            "Select your Ollama model:",
-            choices=[questionary.Choice(display, value=value) for display, value, _ in OLLAMA_LLM_ORDER],
-            style=questionary.Style(
-                [
-                    ("selected", "fg:green bold"),
-                    ("pointer", "fg:green bold"),
-                    ("highlighted", "fg:green"),
-                    ("answer", "fg:green bold"),
-                ]
-            ),
-        ).ask()
-        if not model_name:
-            print("\n\nInterrupt received. Exiting...")
-            return 1
-        if model_name == "-":
-            model_name = questionary.text("Enter the custom model name:").ask()
+        if not sys.stdin.isatty() or not sys.stdout.isatty():
+            model_name = OLLAMA_LLM_ORDER[0][1]
+            print(f"{Fore.CYAN}Non-interactive:{Style.RESET_ALL} default Ollama model {model_name}")
+        else:
+            model_name = questionary.select(
+                "Select your Ollama model:",
+                choices=[questionary.Choice(display, value=value) for display, value, _ in OLLAMA_LLM_ORDER],
+                style=questionary.Style(
+                    [
+                        ("selected", "fg:green bold"),
+                        ("pointer", "fg:green bold"),
+                        ("highlighted", "fg:green"),
+                        ("answer", "fg:green bold"),
+                    ]
+                ),
+            ).ask()
             if not model_name:
                 print("\n\nInterrupt received. Exiting...")
                 return 1
+            if model_name == "-":
+                model_name = questionary.text("Enter the custom model name:").ask()
+                if not model_name:
+                    print("\n\nInterrupt received. Exiting...")
+                    return 1
         if not ensure_ollama_and_model(model_name):
             print(f"{Fore.RED}Cannot proceed without Ollama and the selected model.{Style.RESET_ALL}")
             return 1
+        warn_suboptimal_quant_for_amd_vulkan(model_name)
         model_provider = ModelProvider.OLLAMA.value
         print(
             f"\nSelected {Fore.CYAN}Ollama{Style.RESET_ALL} model: {Fore.GREEN + Style.BRIGHT}{model_name}{Style.RESET_ALL}\n"
         )
     else:
-        model_choice = questionary.select(
-            "Select your LLM model:",
-            choices=[questionary.Choice(display, value=(name, provider)) for display, name, provider in LLM_ORDER],
-            style=questionary.Style(
-                [
-                    ("selected", "fg:green bold"),
-                    ("pointer", "fg:green bold"),
-                    ("highlighted", "fg:green"),
-                    ("answer", "fg:green bold"),
-                ]
-            ),
-        ).ask()
-        if not model_choice:
-            print("\n\nInterrupt received. Exiting...")
-            return 1
-        model_name, model_provider = model_choice
-        model_info = get_model_info(model_name, model_provider)
-        if model_info and model_info.is_custom():
-            model_name = questionary.text("Enter the custom model name:").ask()
-            if not model_name:
+        if not sys.stdin.isatty() or not sys.stdout.isatty():
+            model_name, model_provider = LLM_ORDER[0][1], LLM_ORDER[0][2]
+            print(f"{Fore.CYAN}Non-interactive mode:{Style.RESET_ALL} using {model_provider} / {model_name}")
+        else:
+            model_choice = questionary.select(
+                "Select your LLM model:",
+                choices=[questionary.Choice(display, value=(name, provider)) for display, name, provider in LLM_ORDER],
+                style=questionary.Style(
+                    [
+                        ("selected", "fg:green bold"),
+                        ("pointer", "fg:green bold"),
+                        ("highlighted", "fg:green"),
+                        ("answer", "fg:green bold"),
+                    ]
+                ),
+            ).ask()
+            if not model_choice:
                 print("\n\nInterrupt received. Exiting...")
                 return 1
-        print(
-            f"\nSelected {Fore.CYAN}{model_provider}{Style.RESET_ALL} model: {Fore.GREEN + Style.BRIGHT}{model_name}{Style.RESET_ALL}\n"
-        )
+            model_name, model_provider = model_choice
+            model_info = get_model_info(model_name, model_provider)
+            if model_info and model_info.is_custom():
+                model_name = questionary.text("Enter the custom model name:").ask()
+                if not model_name:
+                    print("\n\nInterrupt received. Exiting...")
+                    return 1
+            print(
+                f"\nSelected {Fore.CYAN}{model_provider}{Style.RESET_ALL} model: {Fore.GREEN + Style.BRIGHT}{model_name}{Style.RESET_ALL}\n"
+            )
 
     engine = BacktestEngine(
         agent=run_hedge_fund,

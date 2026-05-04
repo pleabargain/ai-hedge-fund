@@ -169,10 +169,16 @@ def get_model(model_name: str, model_provider: ModelProvider, api_keys: dict = N
             raise ValueError("DeepSeek API key not found.  Please make sure DEEPSEEK_API_KEY is set in your .env file or provided via API keys.")
         return ChatDeepSeek(model=model_name, api_key=api_key)
     elif model_provider == ModelProvider.GOOGLE:
-        api_key = (api_keys or {}).get("GOOGLE_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        # Accept GEMINI_API_KEY as a common alias (Google's own SDKs use this name).
+        api_key = (
+            (api_keys or {}).get("GOOGLE_API_KEY")
+            or os.getenv("GOOGLE_API_KEY")
+            or (api_keys or {}).get("GEMINI_API_KEY")
+            or os.getenv("GEMINI_API_KEY")
+        )
         if not api_key:
-            print(f"API Key Error: Please make sure GOOGLE_API_KEY is set in your .env file or provided via API keys.")
-            raise ValueError("Google API key not found.  Please make sure GOOGLE_API_KEY is set in your .env file or provided via API keys.")
+            print(f"API Key Error: Please make sure GOOGLE_API_KEY (or GEMINI_API_KEY) is set in your .env file or provided via API keys.")
+            raise ValueError("Google API key not found.  Please make sure GOOGLE_API_KEY (or GEMINI_API_KEY) is set in your .env file or provided via API keys.")
         return ChatGoogleGenerativeAI(model=model_name, api_key=api_key)
     elif model_provider == ModelProvider.OLLAMA:
         # For Ollama, we use a base URL instead of an API key

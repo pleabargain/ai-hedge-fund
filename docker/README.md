@@ -80,7 +80,7 @@ FINANCIAL_DATASETS_API_KEY=your-financial-datasets-api-key
 
 **Important**: You must set at least one LLM API key (e.g. `OPENAI_API_KEY`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY`, or `DEEPSEEK_API_KEY`) for the hedge fund to work. 
 
-**Financial Data**: Data for AAPL, GOOGL, MSFT, NVDA, and TSLA is free and does not require an API key. For any other ticker, you will need to set the `FINANCIAL_DATASETS_API_KEY` in the .env file.
+**Financial Data**: Per [Financial Datasets](https://financialdatasets.ai/), free access without an API key applies to **AAPL, GOOGL, NVDA, and TSLA** only. For **MSFT** and all other tickers, set `FINANCIAL_DATASETS_API_KEY` in `.env` (create an account on financialdatasets.ai and copy the key from the dashboard; see [Quick Start](https://docs.financialdatasets.ai/quickstart)).
 
 ## How to Run
 

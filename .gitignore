@@ -22,10 +22,73 @@ wheels/
 
 # Virtual Environment
 venv/
+.venv/
 ENV/
+env.bak/
+.python-env/
 
-# Environment Variables
+# Environment Variables & secrets (safe to publish the repo without leaking keys)
 .env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+.envrc
+.direnv/
+
+# Keys & credential files (common filenames — adjust if you store certs under versioned paths)
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+id_rsa
+id_rsa.pub
+*credentials*.json
+*-service-account*.json
+*service-account*.json
+google-services.json
+GoogleService-Info.plist
+local.settings.json
+secrets.yaml
+secrets.yml
+.secrets/
+secrets/
+**/secrets/
+*.secret
+*.token
+auth.json
+.netrc
+
+# Personal / local working areas (add folder names you use for notes, exports, experiments)
+private/
+personal/
+local-only/
+
+# Tool caches & test artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.hypothesis/
+*.cover
+
+# Logs (often contain paths, prompts, or tokens from debuggers)
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Google Drive / Dropbox-style conflict copies (filenames vary by client)
+*conflicted copy*
+*Conflict*
 
 # IDE
 .idea/
@@ -40,6 +103,24 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
+~$*
+
+# Process / supervisor PID files (never commit live PIDs)
+*.pid
+
+# Playwright / browser test artifacts (can capture logged-in sessions)
+playwright-report/
+test-results/
+.blob_report/
+
+# Coverage / profiling (can embed local paths)
+coverage.xml
+*.prof
+
+# Shell history (often contains accidental `export KEY=...`)
+.bash_history
+.zsh_history
 
 # graph
 *.png
@@ -53,9 +134,12 @@ Thumbs.db
 # Frontend
 node_modules
 
-# Outputs
+# Outputs (research HTML/JSONL may contain model text, tickers, or paths — treat as sensitive)
 outputs/
 /scratchpad/
+scratch/
+tmp/
+temp/
 
 # Database files (users will have their own local databases)
 *.db

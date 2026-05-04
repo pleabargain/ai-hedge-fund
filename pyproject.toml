@@ -1,3 +1,10 @@
+[project]
+name = "ai-hedge-fund"
+version = "1.0.0"
+description = "An AI-powered hedge fund that uses multiple agents to make trading decisions"
+readme = "README.md"
+requires-python = ">=3.11,<4"
+
 [tool.poetry]
 name = "ai-hedge-fund"
 version = "1.0.0"

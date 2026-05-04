@@ -1,10 +1,84 @@
 """Helper functions for LLM"""
 
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pydantic import BaseModel
 from src.llm.models import get_model, get_model_info
 from src.utils.progress import progress
 from src.graph.state import AgentState
+
+_ollama_stall_recovery_lock = threading.Lock()
+_ollama_stall_recovery_done = False
+
+
+def reset_ollama_stall_recovery_flag() -> None:
+    """Reset once-per-run guard (call at start of `run_hedge_fund`)."""
+    global _ollama_stall_recovery_done
+    _ollama_stall_recovery_done = False
+
+
+def _stall_like_llm_exception(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    msg = str(exc).lower()
+    needles = (
+        "timeout",
+        "timed out",
+        "connection refused",
+        "connection error",
+        "econnrefused",
+        "10061",
+        "broken pipe",
+        "reset by peer",
+        "failed to establish",
+        "read timed out",
+    )
+    return any(n in msg for n in needles)
+
+
+def _try_recover_local_ollama_after_stall(
+    state: AgentState | None,
+    model_provider: str,
+    agent_name: str | None,
+    exc: BaseException,
+) -> None:
+    global _ollama_stall_recovery_done
+    if state is None:
+        return
+    if str(model_provider).strip().lower() != "ollama":
+        return
+    if not _stall_like_llm_exception(exc):
+        return
+
+    from src.utils import ollama as ollama_util
+
+    if not ollama_util.auto_restart_on_stall_enabled():
+        progress.set_infra_alert(
+            "Ollama request stalled or failed. Set OLLAMA_AUTO_RESTART_ON_STALL=1 for automatic local restart."
+        )
+        return
+    if not ollama_util.ollama_base_url_is_local():
+        progress.set_infra_alert(
+            "Ollama stalled (remote OLLAMA_BASE_URL). Restart Ollama on that machine manually."
+        )
+        return
+
+    with _ollama_stall_recovery_lock:
+        if _ollama_stall_recovery_done:
+            return
+        _ollama_stall_recovery_done = True
+
+    progress.set_infra_alert(
+        "Ollama stopped responding — restarting local server and ensuring qwen3.5:9b."
+    )
+    print(
+        f"\nOllama stall detected ({type(exc).__name__}); restarting local Ollama + pull "
+        f"{ollama_util.DEFAULT_RECOVERY_OLLAMA_MODEL} if missing."
+    )
+    ok, detail = ollama_util.restart_local_ollama_and_ensure_model()
+    progress.set_infra_alert(detail if ok else f"Recover failed: {detail}")
+    print(("OK — " if ok else "FAILED — ") + detail)
 
 
 def call_llm(
@@ -55,11 +129,25 @@ def call_llm(
             method="json_mode",
         )
 
+    invoke_timeout: float | None = None
+    if state:
+        raw_timeout = state.get("metadata", {}).get("llm_call_timeout_seconds")
+        if isinstance(raw_timeout, (int, float)) and float(raw_timeout) > 0:
+            invoke_timeout = float(raw_timeout)
+
     # Call the LLM with retries
     for attempt in range(max_retries):
         try:
-            # Call the LLM
-            result = llm.invoke(prompt)
+            # Call the LLM (optional wall-clock timeout per attempt — helps when a provider hangs)
+            if invoke_timeout is not None:
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(llm.invoke, prompt)
+                    try:
+                        result = future.result(timeout=invoke_timeout)
+                    except FuturesTimeoutError:
+                        raise TimeoutError(f"LLM invoke exceeded {invoke_timeout}s") from None
+            else:
+                result = llm.invoke(prompt)
 
             # For non-JSON support models, we need to extract and parse the JSON manually
             if model_info and not model_info.has_json_mode():
@@ -70,8 +158,13 @@ def call_llm(
                 return result
 
         except Exception as e:
+            _try_recover_local_ollama_after_stall(state, model_provider, agent_name, e)
             if agent_name:
-                progress.update_status(agent_name, None, f"Error - retry {attempt + 1}/{max_retries}")
+                msg = str(e)
+                if "exceeded" in msg.lower() or isinstance(e, TimeoutError):
+                    progress.update_status(agent_name, None, f"Timeout — retry {attempt + 1}/{max_retries}")
+                else:
+                    progress.update_status(agent_name, None, f"Error - retry {attempt + 1}/{max_retries}")
 
             if attempt == max_retries - 1:
                 print(f"Error in LLM call after {max_retries} attempts: {e}")

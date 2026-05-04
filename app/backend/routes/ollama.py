@@ -25,6 +25,12 @@ class ActionResponse(BaseModel):
     success: bool
     message: str
 
+
+class RecoverResponse(BaseModel):
+    success: bool
+    message: str
+    model: str = "qwen3.5:9b"
+
 class RecommendedModel(BaseModel):
     display_name: str
     model_name: str
@@ -85,6 +91,28 @@ async def start_ollama_server():
     except Exception as e:
         logger.error(f"Unexpected error starting Ollama server: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to start Ollama server: {str(e)}")
+
+
+@router.post(
+    "/restart-recovery",
+    response_model=RecoverResponse,
+    responses={
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
+async def restart_ollama_recovery():
+    """Stop/start local Ollama and pull qwen3.5:9b if missing (best-effort)."""
+    try:
+        result = await ollama_service.restart_recover_default_model()
+        return RecoverResponse(
+            success=bool(result.get("success")),
+            message=result.get("message", "OK"),
+            model=str(result.get("model") or "qwen3.5:9b"),
+        )
+    except Exception as e:
+        logger.error(f"restart-recovery failed: {e}")
+        return RecoverResponse(success=False, message=str(e), model="qwen3.5:9b")
+
 
 @router.post(
     "/stop",

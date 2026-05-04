@@ -2,7 +2,15 @@ import os
 import pytest
 from unittest.mock import Mock, patch, call
 
-from src.tools.api import _make_api_request, get_prices
+from src.tools.api import _make_api_request, get_prices, reset_financial_datasets_error_report_dedupe
+
+
+@pytest.fixture(autouse=True)
+def _reset_fd_error_dedupe():
+    reset_financial_datasets_error_report_dedupe()
+    yield
+    reset_financial_datasets_error_report_dedupe()
+
 
 class TestRateLimiting:
     """Test suite for API rate limiting functionality."""
@@ -14,7 +22,8 @@ class TestRateLimiting:
         # Setup mock responses: first 429, then 200
         mock_429_response = Mock()
         mock_429_response.status_code = 429
-        
+        mock_429_response.headers = {}
+
         mock_200_response = Mock()
         mock_200_response.status_code = 200
         mock_200_response.text = "Success"
@@ -48,7 +57,8 @@ class TestRateLimiting:
         # Setup mock responses: three 429s, then 200
         mock_429_response = Mock()
         mock_429_response.status_code = 429
-        
+        mock_429_response.headers = {}
+
         mock_200_response = Mock()
         mock_200_response.status_code = 200
         mock_200_response.text = "Success"
@@ -85,7 +95,8 @@ class TestRateLimiting:
         # Setup mock responses: first 429, then 200
         mock_429_response = Mock()
         mock_429_response.status_code = 429
-        
+        mock_429_response.headers = {}
+
         mock_200_response = Mock()
         mock_200_response.status_code = 200
         mock_200_response.text = "Success"
@@ -121,6 +132,7 @@ class TestRateLimiting:
         mock_500_response = Mock()
         mock_500_response.status_code = 500
         mock_500_response.text = "Internal Server Error"
+        mock_500_response.headers = {}
         
         mock_get.return_value = mock_500_response
         
@@ -148,22 +160,23 @@ class TestRateLimiting:
         mock_200_response = Mock()
         mock_200_response.status_code = 200
         mock_200_response.text = "Success"
-        
+        mock_200_response.headers = {}
+
         mock_get.return_value = mock_200_response
-        
+
         # Call the function
         headers = {"X-API-KEY": "test-key"}
         url = "https://api.financialdatasets.ai/test"
-        
+
         result = _make_api_request(url, headers)
-        
+
         # Verify behavior
         assert result.status_code == 200
         assert result.text == "Success"
-        
+
         # Verify requests.get was called only once
         assert mock_get.call_count == 1
-        
+
         # Verify sleep was never called
         mock_sleep.assert_not_called()
 
@@ -178,7 +191,8 @@ class TestRateLimiting:
         # Setup mock responses: first 429, then 200 with valid data
         mock_429_response = Mock()
         mock_429_response.status_code = 429
-        
+        mock_429_response.headers = {}
+
         mock_200_response = Mock()
         mock_200_response.status_code = 200
         mock_200_response.json.return_value = {
@@ -223,7 +237,8 @@ class TestRateLimiting:
         mock_429_response = Mock()
         mock_429_response.status_code = 429
         mock_429_response.text = "Too Many Requests"
-        
+        mock_429_response.headers = {}
+
         mock_get.return_value = mock_429_response
         
         # Call the function with max_retries=2

@@ -25,6 +25,11 @@
     "provider": "Alibaba"
   },
   {
+    "display_name": "Qwen 3.5 (9B)",
+    "model_name": "qwen3.5:9b",
+    "provider": "Alibaba"
+  },
+  {
     "display_name": "Llama 3.1 (8B)",
     "model_name": "llama3.1:latest",
     "provider": "Meta"

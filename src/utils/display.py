@@ -1,8 +1,65 @@
 from colorama import Fore, Style
 from tabulate import tabulate
+from typing import Any
+
 from .analysts import ANALYST_ORDER
 import os
 import json
+
+
+def _timing_sort_key(agent_name: str) -> tuple:
+    if "risk_management" in agent_name:
+        return (2, agent_name)
+    if "portfolio_management" in agent_name:
+        return (3, agent_name)
+    return (1, agent_name)
+
+
+def _agent_display_name(agent_id: str) -> str:
+    return agent_id.replace("_agent", "").replace("_", " ").title()
+
+
+def _format_elapsed_cell(agent_name: str, info: dict[str, Any]) -> str:
+    dur = info.get("duration_sec")
+    if dur is not None:
+        try:
+            return f"{Fore.GREEN}{float(dur):.1f}s{Style.RESET_ALL}"
+        except (TypeError, ValueError):
+            pass
+    return f"{Fore.WHITE}—{Style.RESET_ALL}"
+
+
+def _print_agent_run_timing_table(agent_run_timing: dict[str, dict[str, Any]]) -> None:
+    rows: list[list[str]] = []
+    for agent_name, info in sorted(agent_run_timing.items(), key=lambda x: _timing_sort_key(x[0])):
+        disp = _agent_display_name(agent_name)
+        ticker = info.get("ticker")
+        ticker_s = ticker if ticker else "—"
+        status = str(info.get("status") or "")
+        if len(status) > 56:
+            status = status[:53] + "..."
+        rows.append(
+            [
+                f"{Fore.CYAN}{disp}{Style.RESET_ALL}",
+                f"{Fore.WHITE}{ticker_s}{Style.RESET_ALL}",
+                f"{Fore.WHITE}{status}{Style.RESET_ALL}",
+                _format_elapsed_cell(agent_name, info),
+            ]
+        )
+    print(f"\n{Fore.WHITE}{Style.BRIGHT}AGENT RUN TIMING{Style.RESET_ALL}")
+    print(
+        tabulate(
+            rows,
+            headers=[
+                f"{Fore.WHITE}Agent",
+                f"{Fore.WHITE}Ticker",
+                f"{Fore.WHITE}Last status",
+                f"{Fore.WHITE}Elapsed",
+            ],
+            tablefmt="grid",
+            colalign=("left", "left", "left", "right"),
+        )
+    )
 
 
 def sort_agent_signals(signals):
@@ -14,14 +71,34 @@ def sort_agent_signals(signals):
     return sorted(signals, key=lambda x: analyst_order.get(x[0], 999))
 
 
-def print_trading_output(result: dict) -> None:
+def print_trading_output(
+    result: dict,
+    *,
+    agent_run_timing: dict[str, dict[str, Any]] | None = None,
+    wall_seconds: float | None = None,
+    model_name: str | None = None,
+    model_provider: str | None = None,
+) -> None:
     """
     Print formatted trading results with colored tables for multiple tickers.
 
     Args:
         result (dict): Dictionary containing decisions and analyst signals for multiple tickers
+        agent_run_timing: Per-node timing from progress.agent_status (duration_sec, status, ticker).
+        wall_seconds: Total wall-clock seconds for the graph run (shown after timing tables).
+        model_name / model_provider: Shown on the run summary line when wall_seconds is set.
     """
     decisions = result.get("decisions")
+    timing = agent_run_timing or {}
+    if timing:
+        _print_agent_run_timing_table(timing)
+    if wall_seconds is not None and model_name and model_provider:
+        print(
+            f"\n{Fore.WHITE}{Style.BRIGHT}Run total:{Style.RESET_ALL} "
+            f"{Fore.GREEN}{wall_seconds:.1f}s{Style.RESET_ALL} "
+            f"{Fore.WHITE}· model {model_provider} / {model_name}{Style.RESET_ALL}"
+        )
+
     if not decisions:
         print(f"{Fore.RED}No trading decisions available{Style.RESET_ALL}")
         return
@@ -45,6 +122,7 @@ def print_trading_output(result: dict) -> None:
             agent_name = agent.replace("_agent", "").replace("_", " ").title()
             signal_type = signal.get("signal", "").upper()
             confidence = signal.get("confidence", 0)
+            elapsed_cell = _format_elapsed_cell(agent, timing.get(agent, {}))
 
             signal_color = {
                 "BULLISH": Fore.GREEN,
@@ -91,6 +169,7 @@ def print_trading_output(result: dict) -> None:
                     f"{Fore.CYAN}{agent_name}{Style.RESET_ALL}",
                     f"{signal_color}{signal_type}{Style.RESET_ALL}",
                     f"{Fore.WHITE}{confidence}%{Style.RESET_ALL}",
+                    elapsed_cell,
                     f"{Fore.WHITE}{reasoning_str}{Style.RESET_ALL}",
                 ]
             )
@@ -102,9 +181,15 @@ def print_trading_output(result: dict) -> None:
         print(
             tabulate(
                 table_data,
-                headers=[f"{Fore.WHITE}Agent", "Signal", "Confidence", "Reasoning"],
+                headers=[
+                    f"{Fore.WHITE}Agent",
+                    "Signal",
+                    "Confidence",
+                    f"{Fore.WHITE}Elapsed",
+                    "Reasoning",
+                ],
                 tablefmt="grid",
-                colalign=("left", "center", "right", "left"),
+                colalign=("left", "center", "right", "right", "left"),
             )
         )
 

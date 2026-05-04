@@ -66,6 +66,29 @@ class OllamaService:
             logger.error(f"Error starting Ollama server: {e}")
             return {"success": False, "message": f"Error starting server: {str(e)}"}
     
+    async def restart_recover_default_model(self) -> Dict[str, any]:
+        """
+        Hard-restart local Ollama and ensure the recovery tag exists (pull if missing).
+        Only meaningful when OLLAMA_BASE_URL is localhost; remote/Docker URLs are skipped inside the helper.
+        """
+        try:
+            from src.utils.ollama import DEFAULT_RECOVERY_OLLAMA_MODEL, restart_local_ollama_and_ensure_model
+
+            loop = asyncio.get_event_loop()
+
+            def _run_recover() -> tuple[bool, str]:
+                return restart_local_ollama_and_ensure_model(DEFAULT_RECOVERY_OLLAMA_MODEL)
+
+            ok, msg = await loop.run_in_executor(None, _run_recover)
+            return {
+                "success": ok,
+                "message": msg,
+                "model": DEFAULT_RECOVERY_OLLAMA_MODEL,
+            }
+        except Exception as e:
+            logger.exception("restart_recover_default_model failed")
+            return {"success": False, "message": str(e), "model": "qwen3.5:9b"}
+
     async def stop_server(self) -> Dict[str, any]:
         """Stop the Ollama server."""
         try:
